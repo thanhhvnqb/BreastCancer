@@ -19,7 +19,6 @@ from timm.data import (
     FastCollateMixup,
     Mixup,
     create_dataset,
-    create_loader,
     resolve_data_config,
 )
 from timm.loss import (
@@ -46,6 +45,8 @@ from utils.loss import BinaryCrossEntropyPosSmoothOnly
 from utils.metrics import compute_usual_metrics, pfbeta_np
 
 import settings
+
+from loader import create_loader
 
 
 class ValAugment:
@@ -257,11 +258,26 @@ class Exp:
             settings.MODEL_CHECKPOINT_DIR, "timm_classification"
         )
 
+    def set_mixup_active(self, mixup_active):
+        self.args.mixup_active = mixup_active
+
     def build_model(self):
+        in_chans = 3
+        if self.args.in_chans is not None:
+            in_chans = self.args.in_chans
+        elif self.args.input_size is not None:
+            in_chans = self.args.input_size[0]
+        factory_kwargs = {}
+        if self.args.pretrained_path:
+            # merge with pretrained_cfg of model, 'file' has priority over 'url' and 'hf_hub'.
+            factory_kwargs["pretrained_cfg_overlay"] = dict(
+                file=self.args.pretrained_path,
+                num_classes=-1,  # force head adaptation
+            )
         model = create_model(
             self.args.model,
             pretrained=self.args.pretrained,
-            in_chans=self.args.in_chans,
+            in_chans=in_chans,
             num_classes=self.args.num_classes,
             drop_rate=self.args.drop,
             drop_path_rate=self.args.drop_path,
@@ -271,14 +287,27 @@ class Exp:
             bn_eps=self.args.bn_eps,
             scriptable=self.args.torchscript,
             checkpoint_path=self.args.initial_checkpoint,
+            **factory_kwargs,
             **self.args.model_kwargs,
         )
+        if self.args.head_init_scale is not None:
+            with torch.no_grad():
+                model.get_classifier().weight.mul_(self.args.head_init_scale)
+                model.get_classifier().bias.mul_(self.args.head_init_scale)
+        if self.args.head_init_bias is not None:
+            nn.init.constant_(model.get_classifier().bias, self.args.head_init_bias)
 
-        # if utils.is_primary(self.args):
-        #     _logger.info(
-        #     f'Model {safe_model_name(self.args.model)} created, param count:{sum([m.numel() for m in model.parameters()])}')
+        if self.args.num_classes is None:
+            assert hasattr(
+                model, "num_classes"
+            ), "Model must have `num_classes` attr if not set on cmd line/config."
+            self.args.num_classes = (
+                model.num_classes
+            )  # FIXME handle model default vs config num_classes more elegantly
 
-        assert self.data_config is None
+        if self.args.grad_checkpointing:
+            model.set_grad_checkpointing(enable=True)
+
         self.data_config = resolve_data_config(
             vars(self.args), model=model, verbose=utils.is_primary(self.args)
         )
@@ -385,11 +414,15 @@ class Exp:
             re_mode=self.args.remode,
             re_count=self.args.recount,
             re_split=self.args.resplit,
+            train_crop_mode=self.args.train_crop_mode,
             scale=self.args.scale,
             ratio=self.args.ratio,
             hflip=self.args.hflip,
             vflip=self.args.vflip,
             color_jitter=self.args.color_jitter,
+            color_jitter_prob=self.args.color_jitter_prob,
+            grayscale_prob=self.args.grayscale_prob,
+            gaussian_blur_prob=self.args.gaussian_blur_prob,
             auto_augment=self.args.aa,
             num_aug_repeats=self.args.aug_repeats,
             num_aug_splits=self.args.num_aug_splits,
@@ -442,16 +475,16 @@ class Exp:
         return val_dataset
 
     def build_val_loader(self):
-        val_dataset = self.build_val_dataset()
+        eval_dataset = self.build_val_dataset()
 
-        val_workers = self.args.workers
+        eval_workers = self.args.workers
         if self.args.distributed and (
             "tfds" in self.args.dataset or "wds" in self.args.dataset
         ):
             # FIXME reduces validation padding issues when using TFDS, WDS w/ workers and distributed training
-            val_workers = min(2, self.args.workers)
-        val_loader = create_loader(
-            val_dataset,
+            eval_workers = min(2, self.args.workers)
+        loader_eval = create_loader(
+            eval_dataset,
             input_size=self.data_config["input_size"],
             batch_size=self.args.validation_batch_size or self.args.batch_size,
             is_training=False,
@@ -459,13 +492,13 @@ class Exp:
             interpolation=self.data_config["interpolation"],
             mean=self.data_config["mean"],
             std=self.data_config["std"],
-            num_workers=val_workers,
+            num_workers=eval_workers,
             distributed=self.args.distributed,
             crop_pct=self.data_config["crop_pct"],
             pin_memory=self.args.pin_mem,
             device=self.args.device,
         )
-        return val_loader
+        return loader_eval
 
     def build_train_loss_fn(self):
         pos_weight = self.args.pos_weight

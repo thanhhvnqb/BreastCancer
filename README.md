@@ -43,6 +43,24 @@ To prepare the breast cancer dataset, follow these steps:
 
 1. Run the command: `PYTHONPATH=$(pwd):$PYTHONPATH python src/tools/data/prepare_classification_dataset.py --dataset <name_dataset> --root-dir <path_to_downloaded_directory> --stage <stage>`
 
+Or download from here: [RSNA](https://drive.google.com/file/d/1AI-rNC_Ti51_q0wzBYtb4wfxVmy0fKhB/view), [VinDR-Mammo](https://drive.google.com/file/d/1yJLgy5kUoHrj79YbQ9o6-y_SYojUFVH8/view)
+
+### Structure of datasets
+The structure of folder datasets should be look like this:
+```
+$ tree -L 3 datasets
+
+datasets
+└── classification
+    ├── rsna
+    │   ├── cleaned_images
+    │   ├── cleaned_label.csv
+    │   └── fold
+    └── vindr
+        ├── cleaned_images
+        └── cleaned_label.csv
+```
+
 ## Contributing
 
 Contributions are welcome! If you have any ideas or suggestions, please open an issue or submit a pull request.
