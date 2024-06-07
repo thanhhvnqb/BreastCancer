@@ -11,7 +11,10 @@ def pfbeta_np(gts, preds, beta=1):
     ctp = preds[gts == 1].sum()
     cfp = preds[gts == 0].sum()
     beta_squared = beta * beta
-    c_precision = ctp / (ctp + cfp)
+    if ctp + cfp == 0:
+        c_precision = 0.0
+    else:
+        c_precision = ctp / (ctp + cfp)
     c_recall = ctp / y_true_count
     if c_precision > 0 and c_recall > 0:
         ret = (
@@ -25,6 +28,8 @@ def pfbeta_np(gts, preds, beta=1):
 
 
 def _compute_fbeta(precision, recall, beta=1.0):
+    if ((beta**2) * precision + recall) == 0:
+        return 0.0
     return (1 + beta**2) * precision * recall / ((beta**2) * precision + recall)
 
 
@@ -36,8 +41,11 @@ def compute_usual_metrics(gts, preds, beta=1.0, sample_weights=None):
 
     tn, fp, fn, tp = cfm.ravel()
     acc = (tp + tn) / (tn + fp + fn + tp)
-    precision = tp / (tp + fp)
     recall = tp / (tp + fn)
+    if tp + fp == 0:
+        precision = 0.0
+    else:
+        precision = tp / (tp + fp)
     fbeta = _compute_fbeta(precision, recall, beta=beta)
     # frr = fp / (fp + tn)
     # far = fn / (fn + tp)  # 1 - recall

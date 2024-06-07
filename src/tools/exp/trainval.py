@@ -1282,8 +1282,21 @@ def main():
                 ]
             )
         output_dir = utils.get_outdir(
-            args.output if args.output else "./output/train", exp_name
+            args.output if args.output else "./output/train", args.model, exp_name
         )
+        if output_dir is not None:
+            idx = 0
+            org_output_dir = output_dir
+            while os.path.exists(output_dir):
+                idx += 1
+                output_dir = org_output_dir + "_" + str(idx)
+            args.output_dir = output_dir
+            save_results_dir = os.path.join(output_dir, "results")
+            os.makedirs(save_results_dir)
+        else:
+            save_results_dir = None
+        # print('MODEL:\n', model)
+        args.save_results_dir = save_results_dir
         saver = utils.CheckpointSaver(
             model=model,
             optimizer=optimizer,
@@ -1333,19 +1346,6 @@ def main():
         )
 
     torch.cuda.empty_cache()
-    if output_dir is not None:
-        idx = 0
-        org_output_dir = output_dir
-        while os.path.exists(output_dir):
-            idx += 1
-            output_dir = org_output_dir + "_" + str(idx)
-        args.output_dir = output_dir
-        save_results_dir = os.path.join(output_dir, "results")
-        os.makedirs(save_results_dir)
-    else:
-        save_results_dir = None
-    # print('MODEL:\n', model)
-    args.save_results_dir = save_results_dir
 
     results = []
     try:
@@ -1392,18 +1392,6 @@ def main():
                     ema_plot_save_path = None
                     pred_save_path = None
 
-                eval_metrics = validate(
-                    exp,
-                    model,
-                    loader_eval,
-                    validate_loss_fn,
-                    args,
-                    device=device,
-                    amp_autocast=amp_autocast,
-                    plot_save_path=plot_save_path,
-                    pred_save_path=pred_save_path,
-                )
-
                 if model_ema is not None and not args.model_ema_force_cpu:
                     if args.distributed and args.dist_bn in ("broadcast", "reduce"):
                         utils.distribute_bn(
@@ -1423,6 +1411,18 @@ def main():
                         pred_save_path=pred_save_path,
                     )
                     eval_metrics = ema_eval_metrics
+                else:
+                    eval_metrics = validate(
+                        exp,
+                        model,
+                        loader_eval,
+                        validate_loss_fn,
+                        args,
+                        device=device,
+                        amp_autocast=amp_autocast,
+                        plot_save_path=plot_save_path,
+                        pred_save_path=pred_save_path,
+                    )
             else:
                 eval_metrics = None
 

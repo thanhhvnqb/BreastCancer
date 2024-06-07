@@ -48,7 +48,7 @@ class RSNADataset(Dataset):
                 self.labels.append(label)
             print(f"Done loading {data_name} with {len(df)} samples.")
         print(
-            f"DATASET TOTAL LENGTH: {len(self.labels)} with positive percent = {sum(self.labels) / len(self.labels)}"
+            f"DATASET TOTAL LENGTH: {len(self.labels)} with positive percent = {sum(self.labels) / len(self.labels)} ({sum(self.labels)} samples)"
         )
 
     def __len__(self):
