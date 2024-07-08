@@ -25,7 +25,7 @@ To run this project locally, follow these steps:
 
 ## Data Setup
 ### Datasets
-| Dataset     | num_patients* | num_samples* | num_pos_samples* | 
+| Dataset     | num_patients | num_samples | num_pos_samples | 
 |-------------|---------------|--------------|------------------|
 | [BMCD](https://zenodo.org/record/5036062)        | 82            | 328          | 22 (6.71 %)      | [1, 2]    |
 | [CDD-CESM](https://wiki.cancerimagingarchive.net/pages/viewpage.action?pageId=109379611)    | 326           | 1003         | 331 (33 %)       | 
@@ -33,7 +33,7 @@ To run this project locally, follow these steps:
 | [MiniDDSM](https://www.kaggle.com/datasets/cheddad/miniddsm2)   | 1952          | 7808         | 1480 (18.95 %)   |
 | [RSNA](https://www.kaggle.com/competitions/rsna-breast-cancer-detection) | 11913          | 54706        | 1158 (2.12 %)     |
 | [VinDr-Mammo](https://physionet.org/content/vindr-mammo/1.0.0/) | 5000          | 20000        | 226 (1.13 %)     | 
-| All         | 9135          | 34341        | 4691 (13.66 %)   |
+| All         | 21048          | 89047        | 5849 (6.57 %)   |
 
 ### Prepare datasets
 To prepare the breast cancer datasets, follow these steps:
@@ -83,7 +83,13 @@ datasets
         ├── cleaned_label.csv
         └── fold
 ```
-***Note*** that the vindr already split training and testing images. So all of its folds will be same.
+***Note***: the vindr already split training and testing images. So all of its folds will be same.
+
+### Get datasets information
+1. Run this command to get information of all datasets and their folds:
+    ```bash
+    PYTHONPATH=$(pwd):$PYTHONPATH python src/dataset/dataset_info.py
+    ```
 
 ## Usage
 1. Run this command to train model:
@@ -110,7 +116,7 @@ datasets
     --use-ema --gp max --log-interval 100
     ```
 Notes:
-- `name_dataset` should be `rsna`, `vindr`, `miniddsm`, `cmmd`, `cddcesm`, or `bmcd`
+- `name_dataset` should be `rsna`, `vindr`, `miniddsm`, `cmmd`, `cddcesm`, `bmcd`, or `all`.
 - For small datasets, `train_batch_size` should be `8`. You can increase it for large datasets.
 - Input image size should be `3 2048 1024` or `3 1024 512`.
 - List of timm models can be found [here](https://github.com/huggingface/pytorch-image-models/blob/main/results/results-imagenet.csv)

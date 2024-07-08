@@ -58,6 +58,7 @@ def fold_check_other(train_df, val_df):
     ret["mean_age"] = val_df.age.mean()
     return ret
 
+
 # For Vindr dataset
 def fold_check_vindr(train_df, val_df):
     # ensure no overlap
@@ -73,14 +74,17 @@ def fold_check_vindr(train_df, val_df):
     ret["val_pos_patient_num"] = val_df[val_df.cancer == 1].patient_id.nunique()
     ret["val_pos_sample_percent"] = ret["val_pos_sample_num"] / num_samples
     ret["val_pos_patient_percent"] = ret["val_pos_patient_num"] / num_patients
+
     def convert_age(age_str):
         # Remove the trailing 'Y' and leading zeros, then convert to integer
         try:
-            return int(age_str.rstrip('Y'))
+            return int(age_str.rstrip("Y"))
         except:
             return 0
+
     ret["mean_age"] = val_df.age.apply(convert_age).mean()
     return ret
+
 
 # For RSNA dataset
 def fold_check_rsna(train_df, val_df):
@@ -160,8 +164,8 @@ if __name__ == "__main__":
     if dataset == "vindr":
         for i in range(4):
             print(f"Fold {i}:")
-            fold_train_df = df[df['split'] == 'training'].reset_index(drop=True)
-            fold_val_df = df[df['split'] == 'test'].reset_index(drop=True)
+            fold_train_df = df[df["split"] == "training"].reset_index(drop=True)
+            fold_val_df = df[df["split"] == "test"].reset_index(drop=True)
             print(len(fold_train_df), len(fold_val_df))
             save_fold_train_path = os.path.join(SAVE_DIR, f"train_fold_{i}.csv")
             save_fold_val_path = os.path.join(SAVE_DIR, f"val_fold_{i}.csv")
@@ -175,7 +179,6 @@ if __name__ == "__main__":
     else:
         spliter = StratifiedGroupKFold(n_splits=4, shuffle=True, random_state=67)
 
-        
         for i, (train_idxs, val_idxs) in enumerate(
             spliter.split(df, df.cancer, groups=df.patient_id)
         ):
