@@ -5,8 +5,8 @@ This project aims to analyze and predict breast cancer using machine learning te
 ## Table of Contents
 
 - [Introduction](#introduction)
-- [Dataset](#dataset)
 - [Installation](#installation)
+- [Data Setup](#data-setup)
 - [Usage](#usage)
 - [Contributing](#contributing)
 - [License](#license)
@@ -23,7 +23,7 @@ To run this project locally, follow these steps:
 1. Install the required dependencies: `pip install -r requirements.txt`
 1. Login to WanDB: `wandb login` if you want to sync experiment to WanDB
 
-## Prepare dataset
+## Data Setup
 ### Datasets
 | Dataset     | num_patients* | num_samples* | num_pos_samples* | 
 |-------------|---------------|--------------|------------------|
@@ -35,24 +35,25 @@ To run this project locally, follow these steps:
 | [VinDr-Mammo](https://physionet.org/content/vindr-mammo/1.0.0/) | 5000          | 20000        | 226 (1.13 %)     | 
 | All         | 9135          | 34341        | 4691 (13.66 %)   |
 
-### Prepare dataset
-To prepare the breast cancer dataset, follow these steps:
+### Prepare datasets
+To prepare the breast cancer datasets, follow these steps:
 1. Download the dataset from the original site.
 1. For `CMMD` and `BMCD`, copy the `<name_db>_raw_label.csv` file in the folder assets/cleaned_data, which we got from [\[1\]](https://github.com/dangnh0611/kaggle_rsna_breast_cancer)
 1. Run this command to convert dicom images and make `cleaned_label.csv`:
-```bash
-PYTHONPATH=$(pwd):$PYTHONPATH python src/dataset/prepare_classification_dataset.py --dataset <name_dataset> --root-dir <path_to_downloaded_directory> --stage <stage>
-```
+    ```bash
+    PYTHONPATH=$(pwd):$PYTHONPATH python src/dataset/prepare_classification_dataset.py --dataset <name_dataset> --root-dir <path_to_downloaded_directory> --stage <stage>
+    ```
 1. Run this command to split dataset to 4 folds:
-```bash
-PYTHONPATH=$(pwd):$PYTHONPATH python src/dataset/fold_split.py --dataset <name_dataset>
-```
+    ```bash
+    PYTHONPATH=$(pwd):$PYTHONPATH python src/dataset/fold_split.py --dataset <name_dataset>
+    ```
 
 Or download from here: [BMCD](https://drive.google.com/file/d/1PMIHXB4OyjAmmtSV7dkAu9n_EVqUs00p/view), [CDD-CESM](https://drive.google.com/file/d/1azV9RyN0tlNIVSg7AbCi72wl-P5HMlse/view), [CMMD](https://drive.google.com/file/d/1F9wdsijc2EWCASXyta0W_8Abp_vzVHf9/view), [MiniDDSM](https://drive.google.com/file/d/1EiTK3N6SG1NXO5pxuIQknXtQRLoyMMxE/view?usp=sharing) [RSNA](https://drive.google.com/file/d/1AI-rNC_Ti51_q0wzBYtb4wfxVmy0fKhB/view), [VinDR-Mammo](https://drive.google.com/file/d/1DIJmdNlayqJmBSjYQ49n2DkTYHeQEbvC/view)
 
 ### Structure of datasets
 The structure of folder datasets should be look like this:
-```
+    
+```bash
 $ tree -L 3 datasets
 
 datasets
@@ -79,25 +80,26 @@ datasets
     │   └── fold
     └── vindr
         ├── cleaned_images
-        └── cleaned_label.csv
+        ├── cleaned_label.csv
+        └── fold
 ```
-Note that the vindr already split training and testing images. So all of its folds will be same.
+***Note*** that the vindr already split training and testing images. So all of its folds will be same.
 
-## Training
+## Usage
 1. Run this command to train model:
-```bash
-PYTHONPATH=$(pwd):$PYTHONPATH python src/exp/trainval.py -f src/exp/trainer.py \
-    --dataset <name_dataset> --experiment <name_experiment>  \
-    --exp-kwargs fold_idx=<fold_index> \
-    --model <name_model> --pretrained --num-classes 1 \
-    --batch-size <train_batch_size> --validation-batch-size <validation_batch_size> --input-size <image_size> \
-    --opt sgd --lr 3e-3 --min-lr 5e-5 --sched cosine --warmup-lr 3e-5 \
-    --epochs 35 --warmup-epoch 4 --cooldown-epochs 1 \
-    --no-aug --crop-pct 1.0 --bce-loss --smoothing 0.1 \
-    --workers 24 --eval-metric single_pfbeta \
-    --checkpoint-hist 100 --drop 0.5 --drop-path 0.2 --amp --amp-impl native \
-    --save-images --model-ema --model-ema-decay 0.9998 --gp max --log-interval 100
-```
+    ```bash
+    PYTHONPATH=$(pwd):$PYTHONPATH python src/exp/trainval.py -f src/exp/trainer.py \
+        --dataset <name_dataset> --experiment <name_experiment>  \
+        --exp-kwargs fold_idx=<fold_index> \
+        --model <name_model> --pretrained --num-classes 1 \
+        --batch-size <train_batch_size> --validation-batch-size <validation_batch_size> --input-size <image_size> \
+        --opt sgd --lr 3e-3 --min-lr 5e-5 --sched cosine --warmup-lr 3e-5 \
+        --epochs 35 --warmup-epoch 4 --cooldown-epochs 1 \
+        --no-aug --crop-pct 1.0 --bce-loss --smoothing 0.1 \
+        --workers 24 --eval-metric single_pfbeta \
+        --checkpoint-hist 100 --drop 0.5 --drop-path 0.2 --amp --amp-impl native \
+        --save-images --model-ema --model-ema-decay 0.9998 --gp max --log-interval 100
+    ```
 Notes:
 - `name_dataset` should be `rsna`, `vindr`, `miniddsm`, `cmmd`, `cddcesm`, or `bmcd`
 - For small datasets, `train_batch_size` should be `8`. You can increase it for large datasets.
