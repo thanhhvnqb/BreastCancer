@@ -2,3 +2,4 @@ datasets
 output
 **/*.pyc
 wandb
+.*

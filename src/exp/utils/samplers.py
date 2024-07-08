@@ -93,7 +93,7 @@ class BalanceSamplerV2(Sampler):
         self.len = len(self.pre_compute_epoch_idxs[ep])
 
     def _pre_compute_epoch_idxs(self, ratio, one_pos_mode=True):
-        print(f"Pre-compute for ratio = {ratio}")
+        # print(f"Pre-compute for ratio = {ratio}")
         epoch_num_pos = int(ratio * self.num_neg)
         epoch_num_iters = (epoch_num_pos + self.num_neg) // self.batch_size
         epoch_num_total = epoch_num_iters * self.batch_size

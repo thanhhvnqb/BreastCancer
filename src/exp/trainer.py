@@ -10,7 +10,6 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 from albumentations.pytorch.transforms import ToTensorV2
-from exhaustive_weighted_random_sampler import ExhaustiveWeightedRandomSampler
 from ignite.distributed import DistributedProxySampler
 import datasets
 from timm import utils
@@ -43,10 +42,73 @@ from utils import metrics as rsna_metrics
 from utils import samplers
 from utils.loss import BinaryCrossEntropyPosSmoothOnly
 from utils.metrics import compute_usual_metrics, pfbeta_np
+from ptflops import get_model_complexity_info
 
 import settings
 
 from loader import create_loader
+
+# from timm.data import create_loader
+
+
+class BreastModel(nn.Module):
+    def __init__(self, args):
+        super(BreastModel, self).__init__()
+        in_chans = 3
+        if args.in_chans is not None:
+            in_chans = args.in_chans
+        elif args.input_size is not None:
+            in_chans = args.input_size[0]
+        factory_kwargs = {}
+        if args.pretrained_path:
+            # merge with pretrained_cfg of model, 'file' has priority over 'url' and 'hf_hub'.
+            factory_kwargs["pretrained_cfg_overlay"] = dict(
+                file=args.pretrained_path,
+                num_classes=-1,  # force head adaptation
+            )
+        model = create_model(
+            args.model,
+            pretrained=args.pretrained,
+            in_chans=in_chans,
+            num_classes=args.num_classes,
+            drop_rate=args.drop,
+            drop_path_rate=args.drop_path,
+            drop_block_rate=args.drop_block,
+            global_pool=args.gp,
+            bn_momentum=args.bn_momentum,
+            bn_eps=args.bn_eps,
+            scriptable=args.torchscript,
+            checkpoint_path=args.initial_checkpoint,
+            **factory_kwargs,
+            **args.model_kwargs,
+        )
+        if args.head_init_scale is not None:
+            with torch.no_grad():
+                model.get_classifier().weight.mul_(args.head_init_scale)
+                model.get_classifier().bias.mul_(args.head_init_scale)
+        if args.head_init_bias is not None:
+            nn.init.constant_(model.get_classifier().bias, args.head_init_bias)
+
+        if args.num_classes is None:
+            assert hasattr(
+                model, "num_classes"
+            ), "Model must have `num_classes` attr if not set on cmd line/config."
+            args.num_classes = (
+                model.num_classes
+            )  # FIXME handle model default vs config num_classes more elegantly
+        self.base_model = model
+        if args.num_classes == 1:
+            self.output = nn.Sigmoid()
+        else:
+            self.output = nn.Softmax()
+        if args.grad_checkpointing:
+            model.set_grad_checkpointing(enable=True)
+
+    def forward(self, x):
+        outputs = self.base_model(x)
+        # You write you new head here
+        outputs = self.output(outputs)
+        return outputs
 
 
 class ValAugment:
@@ -245,7 +307,7 @@ class Exp:
         self.meta = {
             "fold_idx": 0,
             "num_sched_epochs": 6,
-            "num_epochs": 50,
+            "num_epochs": args.epochs,
             "start_ratio": 1 / 3,
             "end_ratio": 1 / 7,
             "one_pos_mode": True,
@@ -262,22 +324,11 @@ class Exp:
         self.args.mixup_active = mixup_active
 
     def build_model(self):
-        in_chans = 3
-        if self.args.in_chans is not None:
-            in_chans = self.args.in_chans
-        elif self.args.input_size is not None:
-            in_chans = self.args.input_size[0]
-        factory_kwargs = {}
-        if self.args.pretrained_path:
-            # merge with pretrained_cfg of model, 'file' has priority over 'url' and 'hf_hub'.
-            factory_kwargs["pretrained_cfg_overlay"] = dict(
-                file=self.args.pretrained_path,
-                num_classes=-1,  # force head adaptation
-            )
+        # model = BreastModel(self.args)
         model = create_model(
             self.args.model,
             pretrained=self.args.pretrained,
-            in_chans=in_chans,
+            in_chans=self.args.in_chans,
             num_classes=self.args.num_classes,
             drop_rate=self.args.drop,
             drop_path_rate=self.args.drop_path,
@@ -287,74 +338,81 @@ class Exp:
             bn_eps=self.args.bn_eps,
             scriptable=self.args.torchscript,
             checkpoint_path=self.args.initial_checkpoint,
-            **factory_kwargs,
             **self.args.model_kwargs,
         )
-        if self.args.head_init_scale is not None:
-            with torch.no_grad():
-                model.get_classifier().weight.mul_(self.args.head_init_scale)
-                model.get_classifier().bias.mul_(self.args.head_init_scale)
-        if self.args.head_init_bias is not None:
-            nn.init.constant_(model.get_classifier().bias, self.args.head_init_bias)
-
-        if self.args.num_classes is None:
-            assert hasattr(
-                model, "num_classes"
-            ), "Model must have `num_classes` attr if not set on cmd line/config."
-            self.args.num_classes = (
-                model.num_classes
-            )  # FIXME handle model default vs config num_classes more elegantly
-
-        if self.args.grad_checkpointing:
-            model.set_grad_checkpointing(enable=True)
-
         self.data_config = resolve_data_config(
             vars(self.args), model=model, verbose=utils.is_primary(self.args)
         )
-
-        return model
+        macs, params = get_model_complexity_info(model, tuple(self.args.input_size))
+        return model, macs, params
 
     def build_train_dataset(self):
         assert self.data_config is not None
         fold_idx = self.meta["fold_idx"]
         augment_fn = TrainAugment()
         transform_fn = TrainTransform(self.data_config["input_size"][1:])
+        DATASETS = ["rsna", "bmcd", "cddcesm", "cmmd", "miniddsm", "vindr"]
+        dataset = self.args.dataset
+        if dataset == "all":
+            train_datasets_info = []
+            for dataset_name in DATASETS:
+                if dataset_name == "vindr":
+                    dataset_info = {
+                        "csv_path": os.path.join(
+                            settings.PROCESSED_DATA_DIR,
+                            "classification",
+                            dataset_name,
+                            "fold",
+                            f"train_fold_{fold_idx}.csv",
+                        ),
+                        "img_dir": os.path.join(
+                            settings.PROCESSED_DATA_DIR,
+                            "classification",
+                            dataset_name,
+                            "cleaned_images",
+                        ),
+                    }
+                else:
+                    dataset_info = {
+                        "csv_path": os.path.join(
+                            settings.PROCESSED_DATA_DIR,
+                            "classification",
+                            dataset_name,
+                            "cleaned_label.csv",
+                        ),
+                        "img_dir": os.path.join(
+                            settings.PROCESSED_DATA_DIR,
+                            "classification",
+                            dataset_name,
+                            "cleaned_images",
+                        ),
+                    }
+                train_datasets_info.append((dataset_name, dataset_info))
+        else:
+            assert dataset in DATASETS
+            train_datasets_info = []
+            train_datasets_info = [
+                (
+                    dataset,
+                    {
+                        "csv_path": os.path.join(
+                            settings.PROCESSED_DATA_DIR,
+                            "classification",
+                            dataset,
+                            "fold",
+                            f"train_fold_{fold_idx}.csv",
+                        ),
+                        "img_dir": os.path.join(
+                            settings.PROCESSED_DATA_DIR,
+                            "classification",
+                            dataset,
+                            "cleaned_images",
+                        ),
+                    },
+                )
+            ]
 
-        rsna_train_dataset_info = {
-            "csv_path": os.path.join(
-                settings.PROCESSED_DATA_DIR,
-                "classification",
-                "rsna",
-                "fold",
-                f"train_fold_{fold_idx}.csv",
-            ),
-            "img_dir": os.path.join(
-                settings.PROCESSED_DATA_DIR,
-                "classification",
-                "rsna",
-                "cleaned_images",
-            ),
-        }
-        train_datasets_info = [("rsna", rsna_train_dataset_info)]
-        # EXTERNAL_DATASETS = ["bmcd", "cddcesm", "cmmd", "miniddsm", "vindr"]
-        # for dataset_name in EXTERNAL_DATASETS:
-        #     dataset_info = {
-        #         "csv_path": os.path.join(
-        #             settings.PROCESSED_DATA_DIR,
-        #             "classification",
-        #             dataset_name,
-        #             "cleaned_label.csv",
-        #         ),
-        #         "img_dir": os.path.join(
-        #             settings.PROCESSED_DATA_DIR,
-        #             "classification",
-        #             dataset_name,
-        #             "cleaned_images",
-        #         ),
-        #     }
-        #     train_datasets_info.append((dataset_name, dataset_info))
-
-        train_dataset = datasets.RSNADataset(
+        train_dataset = datasets.BreastDataset(
             train_datasets_info,
             augment_fn,
             transform_fn,
@@ -385,8 +443,8 @@ class Exp:
                     batch_size=self.args.batch_size,
                     num_sched_epochs=self.meta["num_sched_epochs"],
                     num_epochs=self.meta["num_epochs"],
-                    start_ratio=self.meta["start_ratio"],
-                    end_ratio=self.meta["end_ratio"],
+                    start_ratio=train_dataset.pos_neg_ratio,
+                    end_ratio=train_dataset.pos_neg_ratio,
                     one_pos_mode=self.meta["one_pos_mode"],
                     seed=self.args.seed,
                 )
@@ -397,8 +455,8 @@ class Exp:
                 batch_size=self.args.batch_size,
                 num_sched_epochs=self.meta["num_sched_epochs"],
                 num_epochs=self.meta["num_epochs"],
-                start_ratio=self.meta["start_ratio"],
-                end_ratio=self.meta["end_ratio"],
+                start_ratio=train_dataset.pos_neg_ratio,
+                end_ratio=train_dataset.pos_neg_ratio,
                 one_pos_mode=self.meta["one_pos_mode"],
                 seed=self.args.seed,
             )
@@ -447,25 +505,51 @@ class Exp:
 
         augment_fn = ValAugment()
         transform_fn = ValTransform(self.data_config["input_size"][1:])
+        DATASETS = ["rsna", "bmcd", "cddcesm", "cmmd", "miniddsm", "vindr"]
+        dataset = self.args.dataset
+        if dataset == "all":
+            val_datasets_info = []
+            for dataset_name in DATASETS:
+                dataset_info = {
+                    "csv_path": os.path.join(
+                        settings.PROCESSED_DATA_DIR,
+                        "classification",
+                        dataset_name,
+                        "cleaned_label.csv",
+                    ),
+                    "img_dir": os.path.join(
+                        settings.PROCESSED_DATA_DIR,
+                        "classification",
+                        dataset_name,
+                        "cleaned_images",
+                    ),
+                }
+                val_datasets_info.append((dataset_name, dataset_info))
+        else:
+            assert dataset in DATASETS
+            val_datasets_info = [
+                (
+                    dataset,
+                    {
+                        "csv_path": os.path.join(
+                            settings.PROCESSED_DATA_DIR,
+                            "classification",
+                            dataset,
+                            "fold",
+                            f"val_fold_{fold_idx}.csv",
+                            # f"train_fold_{fold_idx}.csv",
+                        ),
+                        "img_dir": os.path.join(
+                            settings.PROCESSED_DATA_DIR,
+                            "classification",
+                            dataset,
+                            "cleaned_images",
+                        ),
+                    },
+                )
+            ]
 
-        rsna_val_dataset_info = {
-            "csv_path": os.path.join(
-                settings.PROCESSED_DATA_DIR,
-                "classification",
-                "rsna",
-                "fold",
-                f"val_fold_{fold_idx}.csv",
-            ),
-            "img_dir": os.path.join(
-                settings.PROCESSED_DATA_DIR,
-                "classification",
-                "rsna",
-                "cleaned_images",
-            ),
-        }
-        val_datasets_info = [("rsna", rsna_val_dataset_info)]
-
-        val_dataset = datasets.RSNADataset(
+        val_dataset = datasets.BreastDataset(
             val_datasets_info,
             augment_fn,
             transform_fn,
@@ -539,7 +623,10 @@ class Exp:
         return train_loss_fn
 
     def build_val_loss_fn(self):
-        val_loss_fn = nn.CrossEntropyLoss().to(device=self.args.device)
+        # val_loss_fn = nn.CrossEntropyLoss(reduction="sum").to(device=self.args.device)
+        val_loss_fn = BinaryCrossEntropy(
+            target_threshold=self.args.bce_target_thresh
+        ).to(device=self.args.device)
         return val_loss_fn
 
     def build_optimizer(self, model):
@@ -563,35 +650,19 @@ class Exp:
         df,
         plot_save_path,
         thres_range=(0, 1, 0.01),
-        sort_by="pfbeta",
+        sort_by="fbeta",
         additional_info=False,
     ):
-        ori_df = df[
-            ["site_id", "patient_id", "laterality", "cancer", "preds", "targets"]
-        ]
+        ori_df = df[["patient_id", "laterality", "cancer", "preds", "targets"]]
         all_metrics = {}
 
         reducer_single = lambda df: df
         reducer_gbmean = lambda df: df.groupby(["patient_id", "laterality"]).mean()
-        reducer_gbmax = lambda df: df.groupby(["patient_id", "laterality"]).mean()
-        reducer_gbmean_site1 = (
-            lambda df: df[df.site_id == 1]
-            .reset_index(drop=True)
-            .groupby(["patient_id", "laterality"])
-            .mean()
-        )
-        reducer_gbmean_site2 = (
-            lambda df: df[df.site_id == 2]
-            .reset_index(drop=True)
-            .groupby(["patient_id", "laterality"])
-            .mean()
-        )
+        reducer_gbmax = lambda df: df.groupby(["patient_id", "laterality"]).max()
 
         reducers = {
             "single": reducer_single,
             "gbmean": reducer_gbmean,
-            "gbmean_site1": reducer_gbmean_site1,
-            "gbmean_site2": reducer_gbmean_site2,
             "gbmax": reducer_gbmax,
         }
 
@@ -599,6 +670,8 @@ class Exp:
             df = reducer(ori_df.copy())
             preds = df["preds"].to_numpy()
             gts = df["targets"].to_numpy()
+            gts[gts>=0.5] = 1
+            gts[gts<0.5] = 0
             # mean_sample_weights = mean_df['sample_weights']
             _metrics = self._compute_metrics(gts, preds, None, thres_range, sort_by)
             all_metrics[f"{reducer_name}_best_thres"] = _metrics["best_thres"]
@@ -614,7 +687,7 @@ class Exp:
 
         # rank 0 only
         if additional_info:
-            rsna_metrics.compute_all(ori_df, plot_save_path)
+            rsna_metrics.print_metric(all_metrics, plot_save_path, ori_df)
         return all_metrics
 
     def _compute_metrics(
@@ -623,7 +696,7 @@ class Exp:
         preds,
         sample_weights=None,
         thres_range=(0, 1, 0.01),
-        sort_by="pfbeta",
+        sort_by="fbeta",
     ):
         if isinstance(gts, torch.Tensor):
             gts = gts.cpu().numpy()
@@ -633,44 +706,16 @@ class Exp:
         assert len(preds) == len(gts)
 
         # ##### METRICS FOR PROBABILISTIC PREDICTION #####
-        # # log loss for pos/neg/overall
-        # pos_preds = preds[gts == 1]
-        # neg_preds = preds[gts == 0]
-        # if len(pos_preds) > 0:
-        #     pos_loss = sklearn.metrics.log_loss(np.ones_like(pos_preds),
-        #                                         pos_preds,
-        #                                         eps=1e-15,
-        #                                         normalize=True,
-        #                                         sample_weight=None,
-        #                                         labels=[0, 1])
-        # else:
-        #     pos_loss = 99999.
-        # if len(neg_preds) > 0:
-        #     neg_loss = sklearn.metrics.log_loss(np.zeros_like(neg_preds),
-        #                                         neg_preds,
-        #                                         eps=1e-15,
-        #                                         normalize=True,
-        #                                         sample_weight=None,
-        #                                         labels=[0, 1])
-        # else:
-        #     neg_loss = 99999.
-        # total_loss = sklearn.metrics.log_loss(gts,
-        #                                       preds,
-        #                                       eps=1e-15,
-        #                                       normalize=True,
-        #                                       sample_weight=None,
-        #                                       labels=[0, 1])
 
         # Probabilistic-fbeta
         pfbeta = pfbeta_np(gts, preds, beta=1.0)
         # AUC
-        fpr, tpr, _thresholds = sklearn.metrics.roc_curve(gts, preds, pos_label=1)
+        print("gts", gts)
+        fpr, tpr, _ = sklearn.metrics.roc_curve(gts, preds, pos_label=1)
         auc = sklearn.metrics.auc(fpr, tpr)
 
         # PR-AUC
-        precisions, recalls, _thresholds = sklearn.metrics.precision_recall_curve(
-            gts, preds
-        )
+        precisions, recalls, _ = sklearn.metrics.precision_recall_curve(gts, preds)
         pr_auc = sklearn.metrics.auc(recalls, precisions)
 
         ##### METRICS FOR CATEGORICAL PREDICTION #####
@@ -679,8 +724,6 @@ class Exp:
         for thres in np.arange(*thres_range):
             bin_preds = (preds > thres).astype(np.uint8)
             metric_at_thres = compute_usual_metrics(gts, bin_preds, beta=1.0)
-            pfbeta_at_thres = pfbeta_np(gts, bin_preds, beta=1.0)
-            metric_at_thres["pfbeta"] = pfbeta_at_thres
 
             if sample_weights is not None:
                 w_metric_at_thres = compute_usual_metrics(gts, bin_preds, beta=1.0)
@@ -714,7 +757,4 @@ class Exp:
             "pfbeta": pfbeta,
             "auc": auc,
             "prauc": pr_auc,
-            # 'pos_log_loss': pos_loss,
-            # 'neg_log_loss': neg_loss,
-            # 'log_loss': total_loss,
         }

@@ -1053,6 +1053,15 @@ def main():
         _logger.info(f"Training with a single process on 1 device ({args.device}).")
     assert args.rank >= 0
 
+    if utils.is_primary(args) and args.log_wandb:
+        if has_wandb:
+            wandb.init(project=args.experiment, config=args)
+        else:
+            _logger.warning(
+                "You've requested to log metrics to wandb but package not found. "
+                "Metrics not being logged to wandb, try `pip install wandb`"
+            )
+
     # resolve AMP arguments based on PyTorch / Apex availability
     use_amp = None
     amp_dtype = torch.float16
@@ -1084,11 +1093,11 @@ def main():
     exp.args.device = device
 
     # EXP: BUILD MODEL
-    model = exp.build_model()
+    model, macs, params = exp.build_model()
 
     if utils.is_primary(args):
         _logger.info(
-            f"Model {safe_model_name(args.model)} created, param count:{sum([m.numel() for m in model.parameters()])}"
+            f"Model {safe_model_name(args.model)} created, FLOPS: {macs}, Params: {params}"
         )
 
     # setup augmentation batch splits for contrastive loss or split bn
@@ -1311,15 +1320,6 @@ def main():
         with open(os.path.join(output_dir, "args.yaml"), "w") as f:
             f.write(args_text)
 
-    if utils.is_primary(args) and args.log_wandb:
-        if has_wandb:
-            wandb.init(project=args.experiment, config=args)
-        else:
-            _logger.warning(
-                "You've requested to log metrics to wandb but package not found. "
-                "Metrics not being logged to wandb, try `pip install wandb`"
-            )
-
     # EXP: BUILD LR SCHEDULER
     # setup learning rate schedule and starting epoch
     updates_per_epoch = (
@@ -1345,7 +1345,7 @@ def main():
             f'Scheduled epochs: {num_epochs}. LR stepped per {"epoch" if lr_scheduler.t_in_epochs else "update"}.'
         )
 
-    torch.cuda.empty_cache()
+    # torch.cuda.empty_cache()
 
     results = []
     try:
@@ -1355,7 +1355,14 @@ def main():
                 loader_train.loader.dataset.set_epoch(epoch)
             elif args.distributed and hasattr(loader_train.sampler, "set_epoch"):
                 loader_train.sampler.set_epoch(epoch)
-
+            is_nan = torch.stack(
+                [torch.isnan(p).any() for p in model.parameters()]
+            ).any()
+            print("model contain nan: ", is_nan)
+            is_nan = torch.stack(
+                [torch.isnan(p).any() for p in model_ema.parameters()]
+            ).any()
+            print("model_ema contain nan: ", is_nan)
             train_metrics = train_one_epoch(
                 epoch,
                 model,
@@ -1452,7 +1459,6 @@ def main():
             if lr_scheduler is not None:
                 # step LR for next epoch
                 lr_scheduler.step(epoch + 1, latest_metric)
-
             results.append(
                 {
                     "epoch": epoch,
@@ -1460,6 +1466,7 @@ def main():
                     "validation": eval_metrics,
                 }
             )
+
             _logger.info(
                 f"Epoch {epoch} completed in {time.time() - epoch_start_time:.2f} seconds."
             )
@@ -1470,7 +1477,9 @@ def main():
     results = {"all": results}
     if best_metric is not None:
         results["best"] = results["all"][best_epoch - start_epoch]
-        _logger.info("*** Best metric: {0} (epoch {1})".format(best_metric, best_epoch))
+        _logger.info(
+            f"*** Best score of {eval_metric}: {best_metric} (epoch {best_epoch})"
+        )
     print(f"--result\n{json.dumps(results, indent=4)}")
 
 
@@ -1533,11 +1542,20 @@ def train_one_epoch(
 
         # multiply by accum steps to get equivalent for full update
         data_time_m.update(accum_steps * (time.time() - data_start_time))
+        if target.shape[-1] == 1:
+            target = target.float().view(-1, 1).repeat(1, 2)
+            target[:, 0] = 1.0 - target[:, 1]
 
         def _forward():
             with amp_autocast():
                 output = model(input)
+                if output.shape[-1] == 1:
+                    output = output.float().view(-1, 1).repeat(1, 2)
+                    output[:, 0] = 1.0 - output[:, 1]
                 loss = loss_fn(output, target)
+                # print("OUTPUT:", output)
+                # print("TARGET:", target)
+                # print("LOSS:", loss)
             if accum_steps > 1:
                 loss /= accum_steps
             return loss
@@ -1595,7 +1613,7 @@ def train_one_epoch(
         update_time_m.update(time.time() - update_start_time)
         update_start_time = time_now
 
-        if update_idx % args.log_interval == 0:
+        if update_idx % args.log_interval == 0 or update_idx == updates_per_epoch - 1:
             lrl = [param_group["lr"] for param_group in optimizer.param_groups]
             lr = sum(lrl) / len(lrl)
 
@@ -1751,6 +1769,8 @@ def validate(
 
             output = prob
             _targets = target
+            # print("output: ", output)
+            # print("target: ", target)
             _preds = output
             _sample_weights = torch.ones_like(_preds)
 

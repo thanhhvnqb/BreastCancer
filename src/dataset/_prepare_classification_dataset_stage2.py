@@ -142,7 +142,7 @@ def _stage2_process_single_cddcesm(
     assert img.dtype == np.uint8
 
     # YOLOX for ROI extraction
-    img_yolox = img.float()  # float32
+    img_yolox = img  # float32
     # @TODO: subtract on large array --> should move after F.interpolate()
     # YOLOX infer
     try:

@@ -8,8 +8,9 @@ joblib
 wandb
 timm
 pytorch-ignite 
-exhaustive-weighted-random-sampler 
 setproctitle
 albumentations
 matplotlib
 amp
+ptflops
+openpyxl

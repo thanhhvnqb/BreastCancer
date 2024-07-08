@@ -1,21 +1,93 @@
 import math
 import random
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from functools import wraps
+from typing import Callable, List, Tuple, Union
 
 import cv2
 import numpy as np
 from albumentations import random_utils
 from albumentations.augmentations.crops import functional as F
 from albumentations.augmentations.geometric import functional as FGeometric
-from albumentations.augmentations.utils import _maybe_process_in_chunks
 from albumentations.core.transforms_interface import DualTransform, ImageOnlyTransform
+from typing_extensions import Concatenate, ParamSpec
 
+P = ParamSpec("P")
+
+def get_num_channels(image: np.ndarray) -> int:
+    return image.shape[2] if len(image.shape) == 3 else 1
+
+def _maybe_process_in_chunks(
+    process_fn: Callable[Concatenate[np.ndarray, P], np.ndarray], **kwargs
+) -> Callable[[np.ndarray], np.ndarray]:
+    """
+    Wrap OpenCV function to enable processing images with more than 4 channels.
+
+    Limitations:
+        This wrapper requires image to be the first argument and rest must be sent via named arguments.
+
+    Args:
+        process_fn: Transform function (e.g cv2.resize).
+        kwargs: Additional parameters.
+
+    Returns:
+        numpy.ndarray: Transformed image.
+
+    """
+
+    @wraps(process_fn)
+    def __process_fn(img: np.ndarray) -> np.ndarray:
+        num_channels = get_num_channels(img)
+        if num_channels > 4:
+            chunks = []
+            for index in range(0, num_channels, 4):
+                if num_channels - index == 2:
+                    # Many OpenCV functions cannot work with 2-channel images
+                    for i in range(2):
+                        chunk = img[:, :, index + i : index + i + 1]
+                        chunk = process_fn(chunk, **kwargs)
+                        chunk = np.expand_dims(chunk, -1)
+                        chunks.append(chunk)
+                else:
+                    chunk = img[:, :, index : index + 4]
+                    chunk = process_fn(chunk, **kwargs)
+                    chunks.append(chunk)
+            img = np.dstack(chunks)
+        else:
+            img = process_fn(img, **kwargs)
+        return img
+
+    return __process_fn
+
+def get_random_crop_coords(height: int, width: int, crop_height: int, crop_width: int, h_start: float, w_start: float):
+    # h_start is [0, 1) and should map to [0, (height - crop_height)]  (note inclusive)
+    # This is conceptually equivalent to mapping onto `range(0, (height - crop_height + 1))`
+    # See: https://github.com/albumentations-team/albumentations/pull/1080
+    y1 = int((height - crop_height + 1) * h_start)
+    y2 = y1 + crop_height
+    x1 = int((width - crop_width + 1) * w_start)
+    x2 = x1 + crop_width
+    return x1, y1, x2, y2
+
+
+def random_crop(img: np.ndarray, crop_height: int, crop_width: int, h_start: float, w_start: float):
+    height, width = img.shape[:2]
+    if height < crop_height or width < crop_width:
+        raise ValueError(
+            "Requested crop size ({crop_height}, {crop_width}) is "
+            "larger than the image size ({height}, {width})".format(
+                crop_height=crop_height, crop_width=crop_width, height=height, width=width
+            )
+        )
+    x1, y1, x2, y2 = get_random_crop_coords(height, width, crop_height, crop_width, h_start, w_start)
+    img = img[y1:y2, x1:x2]
+    return img
 
 class _CustomBaseRandomSizedCropNoResize(DualTransform):
     # Base class for RandomSizedCrop and RandomResizedCrop
 
     def __init__(self, always_apply=False, p=1.0):
-        super(_CustomBaseRandomSizedCropNoResize, self).__init__(always_apply, p)
+        super(_CustomBaseRandomSizedCropNoResize, self).__init__(always_apply=always_apply, p=p)
 
     def apply(
         self,
@@ -27,7 +99,7 @@ class _CustomBaseRandomSizedCropNoResize(DualTransform):
         interpolation=cv2.INTER_LINEAR,
         **params
     ):
-        return F.random_crop(img, crop_height, crop_width, h_start, w_start)
+        return random_crop(img, crop_height, crop_width, h_start, w_start)
 
     def apply_to_bbox(
         self,

@@ -10,7 +10,7 @@ cv2.setNumThreads(0)
 cv2.ocl.setUseOpenCL(False)
 
 
-class RSNADataset(Dataset):
+class BreastDataset(Dataset):
 
     def __init__(
         self, datasets, augment_fn=None, transform_fn=None, n_channels=3, subset="train"
@@ -50,6 +50,7 @@ class RSNADataset(Dataset):
         print(
             f"DATASET TOTAL LENGTH: {len(self.labels)} with positive percent = {sum(self.labels) / len(self.labels)} ({sum(self.labels)} samples)"
         )
+        self.pos_neg_ratio = sum(self.labels) / len(self.labels)
 
     def __len__(self):
         return len(self.img_paths)
