@@ -1088,7 +1088,7 @@ def main():
 
     # EXP: BUILD EXP
     exp_fn = get_exp_fn(args.exp)
-    exp = exp_fn(args)
+    exp = exp_fn(args, is_train=True)
 
     exp.args.device = device
 

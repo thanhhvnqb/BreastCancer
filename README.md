@@ -89,9 +89,9 @@ datasets
 1. Run this command to train model:
     ```bash
     PYTHONPATH=$(pwd):$PYTHONPATH python src/exp/trainval.py -f src/exp/trainer.py \
-        --dataset <name_dataset> --experiment <name_experiment>  \
+        --dataset <dataset_name> --experiment <experiment_name>  \
         --exp-kwargs fold_idx=<fold_index> \
-        --model <name_model> --pretrained --num-classes 1 \
+        --model <model_name> --pretrained --num-classes 1 \
         --batch-size <train_batch_size> --validation-batch-size <validation_batch_size> --input-size <image_size> \
         --opt sgd --lr 3e-3 --min-lr 5e-5 --sched cosine --warmup-lr 3e-5 \
         --epochs 35 --warmup-epoch 4 --cooldown-epochs 1 \
@@ -99,6 +99,15 @@ datasets
         --workers 24 --eval-metric single_pfbeta \
         --checkpoint-hist 100 --drop 0.5 --drop-path 0.2 --amp --amp-impl native \
         --save-images --model-ema --model-ema-decay 0.9998 --gp max --log-interval 100
+    ```
+1. Run this command to validate model:
+    ```bash
+    PYTHONPATH=$(pwd):$PYTHONPATH python src/exp/validate.py -f src/exp/trainer.py \
+    --dataset <dataset_name> --exp-kwargs fold_idx=<fold_index> \
+    --model <model_name>  --checkpoint $checkpoint --num-classes 1 \
+    --batch-size 8 --input-size 3 1024 512 \
+    --crop-pct 1.0 --workers 24 --amp --amp-impl native \
+    --use-ema --gp max --log-interval 100
     ```
 Notes:
 - `name_dataset` should be `rsna`, `vindr`, `miniddsm`, `cmmd`, `cddcesm`, or `bmcd`

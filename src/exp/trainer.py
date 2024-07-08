@@ -291,11 +291,11 @@ TrainTransform = ValTransform
 
 class Exp:
 
-    def __init__(self, args):
+    def __init__(self, args, is_train=True):
         # synchorize with change in args (alias of same obj)
         self.args = args
         self.data_config = None
-
+        self.is_train = is_train
         # infer num channels
         in_chans = 3
         if self.args.in_chans is not None:
@@ -307,11 +307,13 @@ class Exp:
         self.meta = {
             "fold_idx": 0,
             "num_sched_epochs": 6,
-            "num_epochs": args.epochs,
+            "num_epochs": 30,
             "start_ratio": 1 / 3,
             "end_ratio": 1 / 7,
             "one_pos_mode": True,
         }
+        if hasattr(self.args, "epochs"):
+            self.meta["num_epochs"] = args.epochs
         old_meta_len = len(self.meta)
         self.meta.update(self.args.exp_kwargs)
         assert len(self.meta) == old_meta_len
@@ -325,24 +327,39 @@ class Exp:
 
     def build_model(self):
         # model = BreastModel(self.args)
-        model = create_model(
-            self.args.model,
-            pretrained=self.args.pretrained,
-            in_chans=self.args.in_chans,
-            num_classes=self.args.num_classes,
-            drop_rate=self.args.drop,
-            drop_path_rate=self.args.drop_path,
-            drop_block_rate=self.args.drop_block,
-            global_pool=self.args.gp,
-            bn_momentum=self.args.bn_momentum,
-            bn_eps=self.args.bn_eps,
-            scriptable=self.args.torchscript,
-            checkpoint_path=self.args.initial_checkpoint,
-            **self.args.model_kwargs,
-        )
-        self.data_config = resolve_data_config(
-            vars(self.args), model=model, verbose=utils.is_primary(self.args)
-        )
+        if self.is_train:
+            model = create_model(
+                self.args.model,
+                pretrained=self.args.pretrained,
+                in_chans=self.args.in_chans,
+                num_classes=self.args.num_classes,
+                drop_rate=self.args.drop,
+                drop_path_rate=self.args.drop_path,
+                drop_block_rate=self.args.drop_block,
+                global_pool=self.args.gp,
+                bn_momentum=self.args.bn_momentum,
+                bn_eps=self.args.bn_eps,
+                scriptable=self.args.torchscript,
+                checkpoint_path=self.args.initial_checkpoint,
+                **self.args.model_kwargs,
+            )
+            self.data_config = resolve_data_config(
+                vars(self.args), model=model, verbose=utils.is_primary(self.args)
+            )
+        else:
+            model = create_model(
+                self.args.model,
+                pretrained=self.args.pretrained,
+                num_classes=self.args.num_classes,
+                in_chans=self.args.in_chans,
+                global_pool=self.args.gp,
+                scriptable=self.args.torchscript,
+                **self.args.model_kwargs,
+            )
+            self.data_config = resolve_data_config(
+                vars(self.args), model=model, verbose=True
+            )
+
         macs, params = get_model_complexity_info(model, tuple(self.args.input_size))
         return model, macs, params
 
@@ -562,26 +579,42 @@ class Exp:
         eval_dataset = self.build_val_dataset()
 
         eval_workers = self.args.workers
-        if self.args.distributed and (
-            "tfds" in self.args.dataset or "wds" in self.args.dataset
-        ):
-            # FIXME reduces validation padding issues when using TFDS, WDS w/ workers and distributed training
-            eval_workers = min(2, self.args.workers)
-        loader_eval = create_loader(
-            eval_dataset,
-            input_size=self.data_config["input_size"],
-            batch_size=self.args.validation_batch_size or self.args.batch_size,
-            is_training=False,
-            use_prefetcher=self.args.prefetcher,
-            interpolation=self.data_config["interpolation"],
-            mean=self.data_config["mean"],
-            std=self.data_config["std"],
-            num_workers=eval_workers,
-            distributed=self.args.distributed,
-            crop_pct=self.data_config["crop_pct"],
-            pin_memory=self.args.pin_mem,
-            device=self.args.device,
-        )
+        if self.is_train:
+            if self.args.distributed and (
+                "tfds" in self.args.dataset or "wds" in self.args.dataset
+            ):
+                # FIXME reduces validation padding issues when using TFDS, WDS w/ workers and distributed training
+                eval_workers = min(2, self.args.workers)
+            loader_eval = create_loader(
+                eval_dataset,
+                input_size=self.data_config["input_size"],
+                batch_size=self.args.validation_batch_size or self.args.batch_size,
+                is_training=False,
+                use_prefetcher=self.args.prefetcher,
+                interpolation=self.data_config["interpolation"],
+                mean=self.data_config["mean"],
+                std=self.data_config["std"],
+                num_workers=eval_workers,
+                distributed=self.args.distributed,
+                crop_pct=self.data_config["crop_pct"],
+                pin_memory=self.args.pin_mem,
+                device=self.args.device,
+            )
+        else:
+            loader_eval = create_loader(
+                eval_dataset,
+                input_size=self.data_config["input_size"],
+                batch_size=self.args.batch_size,
+                is_training=False,
+                use_prefetcher=self.args.prefetcher,
+                interpolation=self.data_config["interpolation"],
+                mean=self.data_config["mean"],
+                std=self.data_config["std"],
+                num_workers=eval_workers,
+                crop_pct=self.data_config["crop_pct"],
+                pin_memory=self.args.pin_mem,
+                device=self.args.device,
+            )
         return loader_eval
 
     def build_train_loss_fn(self):
@@ -648,7 +681,7 @@ class Exp:
     def compute_metrics(
         self,
         df,
-        plot_save_path,
+        plot_save_path=None,
         thres_range=(0, 1, 0.01),
         sort_by="fbeta",
         additional_info=False,
@@ -670,10 +703,13 @@ class Exp:
             df = reducer(ori_df.copy())
             preds = df["preds"].to_numpy()
             gts = df["targets"].to_numpy()
-            gts[gts>=0.5] = 1
-            gts[gts<0.5] = 0
+            gts[gts >= 0.5] = 1
+            gts[gts < 0.5] = 0
             # mean_sample_weights = mean_df['sample_weights']
             _metrics = self._compute_metrics(gts, preds, None, thres_range, sort_by)
+            all_metrics[f"{reducer_name}_pfbeta"] = _metrics["pfbeta"]
+            all_metrics[f"{reducer_name}_auc"] = _metrics["auc"]
+            all_metrics[f"{reducer_name}_prauc"] = _metrics["prauc"]
             all_metrics[f"{reducer_name}_best_thres"] = _metrics["best_thres"]
             all_metrics.update(
                 {
@@ -681,9 +717,6 @@ class Exp:
                     for k, v in _metrics["best_metric"].items()
                 }
             )
-            all_metrics[f"{reducer_name}_pfbeta"] = _metrics["pfbeta"]
-            all_metrics[f"{reducer_name}_auc"] = _metrics["auc"]
-            all_metrics[f"{reducer_name}_prauc"] = _metrics["prauc"]
 
         # rank 0 only
         if additional_info:
@@ -710,7 +743,6 @@ class Exp:
         # Probabilistic-fbeta
         pfbeta = pfbeta_np(gts, preds, beta=1.0)
         # AUC
-        print("gts", gts)
         fpr, tpr, _ = sklearn.metrics.roc_curve(gts, preds, pos_label=1)
         auc = sklearn.metrics.auc(fpr, tpr)
 
@@ -751,10 +783,10 @@ class Exp:
 
         # best thres, best results, all results
         return {
-            "best_thres": best_thres,
-            "best_metric": best_metric,
-            "all_metrics": per_thres_metrics,
             "pfbeta": pfbeta,
             "auc": auc,
             "prauc": pr_auc,
+            "best_thres": best_thres,
+            "best_metric": best_metric,
+            "all_metrics": per_thres_metrics,
         }
