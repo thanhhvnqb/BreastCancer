@@ -48,7 +48,7 @@ To prepare the breast cancer datasets, follow these steps:
     PYTHONPATH=$(pwd):$PYTHONPATH python src/dataset/fold_split.py --dataset <name_dataset>
     ```
 
-Or download from here: [BMCD](https://drive.google.com/file/d/1PMIHXB4OyjAmmtSV7dkAu9n_EVqUs00p/view), [CDD-CESM](https://drive.google.com/file/d/1azV9RyN0tlNIVSg7AbCi72wl-P5HMlse/view), [CMMD](https://drive.google.com/file/d/1F9wdsijc2EWCASXyta0W_8Abp_vzVHf9/view), [MiniDDSM](https://drive.google.com/file/d/1EiTK3N6SG1NXO5pxuIQknXtQRLoyMMxE/view?usp=sharing) [RSNA](https://drive.google.com/file/d/1AI-rNC_Ti51_q0wzBYtb4wfxVmy0fKhB/view), [VinDR-Mammo](https://drive.google.com/file/d/1DIJmdNlayqJmBSjYQ49n2DkTYHeQEbvC/view)
+Or download from here: [BMCD](https://drive.google.com/file/d/1PMIHXB4OyjAmmtSV7dkAu9n_EVqUs00p/view), [CDD-CESM](https://drive.google.com/file/d/1azV9RyN0tlNIVSg7AbCi72wl-P5HMlse/view), [CMMD](https://drive.google.com/file/d/1F9wdsijc2EWCASXyta0W_8Abp_vzVHf9/view), [MiniDDSM](https://drive.google.com/file/d/1EiTK3N6SG1NXO5pxuIQknXtQRLoyMMxE/view?usp=sharing) [RSNA](https://drive.google.com/file/d/1AI-rNC_Ti51_q0wzBYtb4wfxVmy0fKhB/view), [VinDR-Mammo](hhttps://drive.google.com/file/d/1rwk2lF4mS25scuveoSoSFovhiQkyg7CE/view)
 
 ### Structure of datasets
 The structure of folder datasets should be look like this:
