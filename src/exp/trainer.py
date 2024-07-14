@@ -728,7 +728,7 @@ class Exp:
         gts,
         preds,
         sample_weights=None,
-        thres_range=(0, 1, 0.01),
+        thres_range=(0.1, 1, 0.01),
         sort_by="fbeta",
     ):
         if isinstance(gts, torch.Tensor):
