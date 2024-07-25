@@ -682,7 +682,7 @@ class Exp:
         self,
         df,
         plot_save_path=None,
-        thres_range=(0, 1, 0.01),
+        thres_range=(0.1, 1, 0.01),
         sort_by="fbeta",
         additional_info=False,
     ):
@@ -729,7 +729,7 @@ class Exp:
         preds,
         sample_weights=None,
         thres_range=(0.1, 1, 0.01),
-        sort_by="fbeta",
+        sort_by="acc",
     ):
         if isinstance(gts, torch.Tensor):
             gts = gts.cpu().numpy()
